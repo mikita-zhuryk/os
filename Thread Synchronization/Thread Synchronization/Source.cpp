@@ -6,12 +6,12 @@ using namespace std;
 CRITICAL_SECTION cs_console_input;
 CRITICAL_SECTION cs_console_output;
 CRITICAL_SECTION cs_array_access;
-CRITICAL_SECTION cs_sum_end;
+CRITICAL_SECTION cs_sum;
 HANDLE start_sum_event;
 
 struct Data {
 
-	volatile uint32_t* arr;
+	uint32_t* arr;
 	size_t size;
 	uint16_t k;
 	uint64_t result;
@@ -27,12 +27,13 @@ bool checkPrime(uint32_t n) {
 	return prime;
 }
 
-void processArray(volatile uint32_t* arr, size_t size, uint16_t delay, uint16_t k) {
+void processArray(uint32_t* arr, size_t size, uint16_t delay, uint16_t k) {
 	size_t count = 0;
 	for (size_t i = 0; i < size; ++i) {
 		for (size_t j = i; j < size; ++j) {
 			if (checkPrime(arr[j]) && !checkPrime(arr[i])) {
 				swap(arr[i], arr[j]);
+				break;
 			}
 		}
 		Sleep(delay);
@@ -52,7 +53,7 @@ DWORD WINAPI work_thread(void* data) {
 	cin >> delay;
 	LeaveCriticalSection(&cs_console_input);
 	Data* d = (Data*)data;
-	volatile uint32_t* arr = d->arr;
+	uint32_t* arr = d->arr;
 	size_t size = d->size;
 	uint16_t k = d->k;
 	processArray(arr, size, delay, k);
@@ -60,14 +61,14 @@ DWORD WINAPI work_thread(void* data) {
 }
 
 DWORD WINAPI sum_thread(void* data) {
+	EnterCriticalSection(&cs_sum);
 	WaitForSingleObject(start_sum_event, INFINITE);
-	EnterCriticalSection(&cs_array_access);
 	Data* d = (Data*)data;
 	d->result = 0;
 	for (size_t i = 0; i < d->k; ++i) {
 		d->result += d->arr[i];
 	}
-	LeaveCriticalSection(&cs_array_access);
+	LeaveCriticalSection(&cs_sum);
 	return 0;
 }
 
@@ -83,7 +84,8 @@ int main() {
 	InitializeCriticalSection(&cs_console_input);
 	InitializeCriticalSection(&cs_console_output);
 	InitializeCriticalSection(&cs_array_access);
-	start_sum_event = CreateEvent(NULL, FALSE, TRUE, NULL);
+	InitializeCriticalSection(&cs_sum);
+	start_sum_event = CreateEvent(NULL, FALSE, FALSE, NULL);
 	ios_base::sync_with_stdio(false);
 	size_t n;
 	cout << "Enter array length\n";
@@ -104,8 +106,8 @@ int main() {
 	cin >> k;
 	data.k = k;
 	ResumeThread(hWorkThread);
+	Sleep(1);
 	unsigned sum_id;
-	//WaitForSingleObject(hWorkThread, INFINITE);
 	HANDLE hSumThread = CreateThread(NULL, 2 * 1048576, sum_thread, &data, NULL, (LPDWORD)&sum_id);
 	EnterCriticalSection(&cs_array_access);
 	EnterCriticalSection(&cs_console_output);
@@ -115,15 +117,13 @@ int main() {
 	}
 	cout << endl;
 	LeaveCriticalSection(&cs_console_output);
-	ResetEvent(start_sum_event);
+	SetEvent(start_sum_event);
 	LeaveCriticalSection(&cs_array_access);
-	EnterCriticalSection(&cs_array_access);
-	cout << "Checked cs_array_access from main\n";
-	LeaveCriticalSection(&cs_array_access);
-	WaitForSingleObject(hSumThread, INFINITE);
+	EnterCriticalSection(&cs_sum);
 	EnterCriticalSection(&cs_console_output);
 	cout << "Sum of the first " << k << " prime numbers in the array: " << data.result << endl;
 	LeaveCriticalSection(&cs_console_output);
+	LeaveCriticalSection(&cs_sum);
 	CloseHandle(hWorkThread);
 	CloseHandle(hSumThread);
 	CloseHandle(start_sum_event);
